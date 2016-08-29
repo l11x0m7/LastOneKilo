@@ -139,6 +139,9 @@ class Generation:
         for i in range(self.groupnum):
             rand_variation_num = random.randint(1, self.var_num)
             # rand_variation_num = 1
+            prop = random.random()
+            if prop <= self.variationrate:
+                self.population[i][0] = random.randint(self.var_minrange[0], self.var_maxrange[0])
             for j in range(rand_variation_num):
                 prop = random.random()
                 if prop <= self.variationrate:

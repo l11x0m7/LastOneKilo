@@ -6,12 +6,19 @@ import pandas as pd
 import math
 import numpy as np
 import MySQLdb
-import datetime
+import logging
 from pyevolve import G1DList
 from pyevolve.GSimpleGA import GSimpleGA
 from ga import Generation
+
 reload(sys)
 sys.setdefaultencoding('utf-8')
+
+logging.basicConfig(level=logging.INFO,
+                format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s',
+                datefmt='%a, %d %b %Y %H:%M:%S',
+                stream=sys.stdout)
+
 # 地球半径
 _R = 6378.137
 # 车速:公里/分钟
@@ -25,8 +32,11 @@ start_work = 8
 end_work = 20
 max_work_minute = (end_work-start_work) * 60
 
-class OneKilo():
+class OneKilo:
 	def __init__(self):
+		# log日志
+		self.logger = logging.log
+
 		self.filelist = ['../data/new_' + str(i) + '.csv' for i in range(1, 7)]
 		# 网点
 		self.wangdian = pd.read_csv(self.filelist[0], names=['Lng', 'Lat'], index_col=0)
@@ -48,8 +58,8 @@ class OneKilo():
 		self.GAGenerator = GSimpleGA
 
 	def distance(self, psd_lng, wd_lng, psd_lat, wd_lat):
-		delta_lng = psd_lng - wd_lng
-		delta_lat = psd_lat - wd_lat
+		delta_lng = (psd_lng - wd_lng)/2
+		delta_lat = (psd_lat - wd_lat)/2
 		return \
 		round(2 * _R * math.asin(math.sqrt(math.sin(math.pi*delta_lat/180)**2\
 			+ math.cos(math.pi*wd_lat/180)*math.cos(math.pi*psd_lat/180)\
@@ -139,6 +149,7 @@ class OneKilo():
 						mov_time = self.distance(spotlng, last_spotlng, spotlat, last_spotlat)
 						process_time = self.stayTime(task[4])
 						courier_info[courierid].append((task[0], task[1], time_seq[courierid]+mov_time, time_seq[courierid]+mov_time+process_time, -task[4], task[5]))
+						start_index[courierid] += 1
 						time_seq[courierid] += (mov_time + process_time)
 						carry_seq[courierid] -= task[4]
 					back_home_dis[courierid] = self.distance(wdlng, spotlng, wdlat, spotlat)
@@ -149,12 +160,14 @@ class OneKilo():
 			cur_real_courier = indeces[cur_courier]
 		F1 = sum(time_seq)
 		F2 = len(np.nonzero(time_seq)[0])
-		# print F1, F2
-		while F1>0.1:
+		# 5倍罚时
+		F3 = 4 * sum(k-max_work_minute for k in time_seq if k > max_work_minute)
+		print F1, F2, F3
+		F1 += F3
+		while F1>10:
 			F1 /= 10.0
-		while F2>0.1:
-			F2 /= 10.0
-		return 1.0/(F1+F2), courier_info
+		F2 = 10*float(F2)/self.max_courier_num
+		return 1.0/(F1*F2), courier_info
 
 
 	def dianShang(self):
@@ -166,37 +179,39 @@ class OneKilo():
 			site_pacnum[siteid] = (len(site2pac), sum(site2pac))
 
 		self.site_pacnum = pd.DataFrame(data=site_pacnum.values(), index=site_pacnum.keys(), columns=['Spotnum', 'Num'])
-		print len(all_sites)
 		count = 0
+		fw = open('../data/result.csv', 'w')
 		for siteid in self.site_pacnum.index:
-			courier_num = int(self.site_pacnum.ix[siteid, 'Num']/max_carriage)+1
-			max_courier_num = self.site_pacnum.ix[siteid, 'Spotnum']
-			spot_num = max_courier_num
+			max_courier_num = int(self.site_pacnum.ix[siteid, 'Num']/max_carriage)+1
+			spot_num = self.site_pacnum.ix[siteid, 'Spotnum']
 			spot_list = self.dian_order.ix[self.dian_order.SiteID==siteid, 'SpotID']
 			pacnum_list = self.dian_order.ix[self.dian_order.SiteID==siteid, 'Num']
 			orderid_list = self.dian_order.ix[self.dian_order.SiteID==siteid].index
 			zipper = zip(spot_list, pacnum_list, orderid_list)
 			self.intid_spotid = dict(zip(range(1, spot_num+1), zipper))
 			self.intid_spotid.update({0:(siteid, 0, '')})
-			g = Generation(self.dianShangFitness, groupnum=4, generation=5, var_num=1+spot_num, crossrate=0.8, variationrate=0.8, var_minrange=[courier_num], var_maxrange=[max_courier_num], decodemap=self.intid_spotid)
+			self.max_courier_num = max_courier_num
+			g = Generation(self.dianShangFitness, groupnum=30, generation=30, var_num=1+spot_num, crossrate=0.8, variationrate=0.8, var_minrange=[max(1, max_courier_num/3)], var_maxrange=[max(1, max_courier_num/2)], decodemap=self.intid_spotid)
 			fitness, route, courier_spot = g.geneEvolve()
-			print fitness, route
+			print 1.0/fitness, route
 			courier_list, courier_spot = zip(*sorted(courier_spot.iteritems(), key=lambda kk:kk[0]))
 			for i, courierid in enumerate(courier_list):
 				cur_courierid = 'D%04d' % (self.courier_use+courierid+1)
 				for item in courier_spot[i]:
-					if item[4] < 0:
+					if item[4] > 0:
 						addr = str(siteid)
 					else:
 						addr = str(item[1])
-					arr_time, leave_time, amount, order_id = str(item[2]), str(item[3]), str(item[4]), str(item[5])
-					print '\t'.join([cur_courierid, addr, arr_time, leave_time, amount, order_id])
+					arr_time, leave_time, amount, order_id = str(int(item[2])), str(int(item[3])), str(item[4]), str(item[5])
+					line = ','.join([cur_courierid, addr, arr_time, leave_time, amount, order_id]).encode('gbk')
+					fw.write(line + '\n')
 			self.courier_use += len(courier_list)
 			count += 1
+			self.logger(logging.INFO, '------------------>Current point is {0}'.format(count))
 			if count == 1:
 				break
 
-
+		fw.close()
 
 
 		# self.gnome.setParams(rangemin=0, rangemax=15)
