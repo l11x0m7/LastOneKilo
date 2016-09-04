@@ -221,13 +221,6 @@ class OneKilo:
 		# print self.ga.bestIndividual()
 
 
-
-	def writeDB(self, sql):
-		ct_sql = r"create table if not exists dianshang(name varchar(128) primary key, created int(10));"
-
-		self.cur.execute(sql)
-		self.conn.commit()
-
 	def ConciseInfo(self):
 		wangdian = self.wangdian
 		peisong = self.peisong
